@@ -1,0 +1,84 @@
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+import statistics
+from scipy.optimize import curve_fit
+import pims
+import trackpy as tp
+import av
+
+container = av.open("5fps1micron.avi")
+for frame in container.decode(video = 0):
+    frame.to_image().save("1Micron/frame-%04d.jpg" % frame.index)
+
+@pims.pipeline
+def gray(image):
+    return image[:, :, 1]
+
+frames = gray(pims.open("1Micron/frame*.jpg"))
+
+f = tp.locate(frames[0], 15, invert = True, minmass = 300)
+f.head()
+
+tp.annotate(f, frames[0])
+
+fig, ax = plt.subplots()
+ax.hist(f['mass'], bins = 10)
+
+tp.subpx_bias(f)
+
+T = tp.batch(frames[:501], 15, invert = True, minmass = 300)
+
+t = tp.link(T, 10, memory = 3)
+
+t1 = tp.filter_stubs(t, 15)
+print(t['particle'].nunique())
+print(t1['particle'].nunique())
+
+plt.figure()
+tp.mass_size(t1.groupby('particle').mean());
+
+t2 = t1[((t1['mass'] > 300) & (t1['size'] < 3.5) & (t1['ecc'] < 0.3))]
+
+plt.figure()
+tp.annotate(t2[t2['frame'] == 0], frames[0]);
+
+plt.figure()
+tp.plot_traj(t2);
+
+d = tp.compute_drift(t2)
+d.plot()
+plt.show()
+
+tm = tp.subtract_drift(t2.copy(), d)
+ax = tp.plot_traj(tm)
+plt.show()
+
+em = tp.emsd(tm, 100/215., 5)
+fig, ax = plt.subplots()
+ax.plot(em.index, em, 'o')
+ax.set_xscale('log')
+ax.set_yscale('log')
+ax.set(ylabel = r'$\langle \Delta r^2 \rangle$ [$\mu$m$^2$]', xlabel = 'lag time $t$')
+ax.set(ylim = (1e-1, 100));
+
+def line(t, a, b):
+    y = (a * t) + b
+    return y
+popt, pcov = curve_fit(line, em.index, em)
+a = popt[0]
+b = popt[1]
+perr = np.sqrt(np.diag(pcov))
+delta_a = perr[0]
+delta_b = perr[1]
+tvals = np.linspace(0, 20, 100)
+plt.plot(tvals, line(tvals, a, b), color = 'black', label = "Best Fit Curve")
+plt.scatter(em.index, em, color = 'gray', label = "Data")
+plt.xlabel('lag time $t$')
+plt.ylabel(r'$\langle \Delta r^2 \rangle$ [$\mu$m$^2$]')
+plt.legend()
+plt.savefig("1_Micron_Line_of_best_fit")
+plt.show()
+plt.close()
+
+print(a, "+/-", delta_a)

@@ -1,0 +1,188 @@
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+import statistics
+from scipy.optimize import curve_fit
+import pims
+import trackpy as tp
+import av
+
+container = av.open("new5fps2micronT1.avi")
+for frame in container.decode(video = 0):
+    frame.to_image().save("Trial_1/T1frame-%04d.jpg" % frame.index)
+container = av.open("new5fps2micronT2.avi")
+for frame in container.decode(video = 0):
+    frame.to_image().save("Trial_2/T2frame-%04d.jpg" % frame.index)
+container = av.open("new5fps2micronT3.avi")
+for frame in container.decode(video = 0):
+    frame.to_image().save("Trial_3/T3frame-%04d.jpg" % frame.index)
+
+@pims.pipeline
+def gray(image):
+    return image[:, :, 1]
+
+framesT1 = gray(pims.open("Trial_1/T1frame*.jpg"))
+framesT2 = gray(pims.open("Trial_2/T2frame*.jpg"))
+framesT3 = gray(pims.open("Trial_3/T3frame*.jpg"))
+
+fT1 = tp.locate(framesT1[0], 17, invert = True, minmass = 1000)
+fT2 = tp.locate(framesT2[0], 17, invert = True, minmass = 1000)
+fT3 = tp.locate(framesT3[0], 17, invert = True, minmass = 1000)
+
+tp.annotate(fT1, framesT1[0])
+tp.annotate(fT2, framesT2[0])
+tp.annotate(fT3, framesT3[0])
+
+fig, ax = plt.subplots()
+ax.hist(fT1['mass'], bins = 10)
+ax.hist(fT2['mass'], bins = 10)
+ax.hist(fT3['mass'], bins = 10)
+
+tp.subpx_bias(fT1)
+tp.subpx_bias(fT2)
+tp.subpx_bias(fT3)
+
+T1 = tp.batch(framesT1[:512], 17, invert = True, minmass = 1000)
+
+T2 = tp.batch(framesT2[:512], 17, invert = True, minmass = 1000)
+
+T3 = tp.batch(framesT3[:512], 17, invert = True, minmass = 1000)
+
+tT1 = tp.link(T1, 10, memory = 3)
+
+tT2 = tp.link(T2, 10, memory = 3)
+
+tT3 = tp.link(T3, 10, memory = 3)
+
+t1T1 = tp.filter_stubs(tT1, 15)
+print(tT1['particle'].nunique())
+print(t1T1['particle'].nunique())
+t1T2 = tp.filter_stubs(tT2, 15)
+print(tT2['particle'].nunique())
+print(t1T2['particle'].nunique())
+t1T3 = tp.filter_stubs(tT3, 15)
+print(tT3['particle'].nunique())
+print(t1T3['particle'].nunique())
+
+plt.figure()
+tp.mass_size(t1T1.groupby('particle').mean());
+tp.mass_size(t1T2.groupby('particle').mean());
+tp.mass_size(t1T3.groupby('particle').mean());
+
+t2T1 = t1T1[((t1T1['mass'] > 1000) & (t1T1['size'] < 4) & (t1T1['ecc'] < 0.3))]
+
+t2T2 = t1T2[((t1T2['mass'] > 1000) & (t1T2['size'] < 4) & (t1T2['ecc'] < 0.3))]
+
+t2T3 = t1T3[((t1T3['mass'] > 1000) & (t1T3['size'] < 4) & (t1T3['ecc'] < 0.3))]
+
+plt.figure()
+tp.annotate(t2T1[t2T1['frame'] == 0], framesT1[0]);
+tp.annotate(t2T2[t2T2['frame'] == 0], framesT2[0]);
+tp.annotate(t2T3[t2T3['frame'] == 0], framesT3[0]);
+
+plt.figure()
+tp.plot_traj(t2T1);
+tp.plot_traj(t2T2);
+tp.plot_traj(t2T3);
+
+dT1 = tp.compute_drift(t2T1)
+dT2 = tp.compute_drift(t2T2)
+dT3 = tp.compute_drift(t2T3)
+dT1.plot()
+dT2.plot()
+dT3.plot()
+plt.show()
+
+tmT1 = tp.subtract_drift(t2T1.copy(), dT1)
+tmT2 = tp.subtract_drift(t2T2.copy(), dT2)
+tmT3 = tp.subtract_drift(t2T3.copy(), dT3)
+ax = tp.plot_traj(tmT1)
+ax = tp.plot_traj(tmT2)
+ax = tp.plot_traj(tmT3)
+plt.show()
+
+emT1 = tp.emsd(tmT1, 100/215., 5)
+fig, ax = plt.subplots()
+ax.plot(emT1.index, emT1, 'o')
+ax.set_xscale('log')
+ax.set_yscale('log')
+ax.set(ylabel = r'$\langle \Delta r^2 \rangle$ [$\mu$m$^2$]', xlabel = 'lag time $t$')
+ax.set(ylim = (1e-1, 100));
+
+emT2 = tp.emsd(tmT2, 100/215., 5)
+fig, ax = plt.subplots()
+ax.plot(emT2.index, emT2, 'o')
+ax.set_xscale('log')
+ax.set_yscale('log')
+ax.set(ylabel = r'$\langle \Delta r^2 \rangle$ [$\mu$m$^2$]', xlabel = 'lag time $t$')
+ax.set(ylim = (1e-1, 100));
+
+emT3 = tp.emsd(tmT3, 100/215., 5)
+fig, ax = plt.subplots()
+ax.plot(emT3.index, emT3, 'o')
+ax.set_xscale('log')
+ax.set_yscale('log')
+ax.set(ylabel = r'$\langle \Delta r^2 \rangle$ [$\mu$m$^2$]', xlabel = 'lag time $t$')
+ax.set(ylim = (1e-1, 100));
+
+def line(t, a, b):
+    y = (a * t) + b
+    return y
+popt1, pcov1 = curve_fit(line, emT1.index, emT1)
+a1 = popt1[0]
+b1 = popt1[1]
+perr1 = np.sqrt(np.diag(pcov1))
+delta_a1 = perr1[0]
+delta_b1 = perr1[1]
+tvals = np.linspace(0, 20, 100)
+plt.plot(tvals, line(tvals, a1, b1), color = 'black', label = "Best Fit Curve")
+plt.scatter(emT1.index, emT1, color = 'gray', label = "Data")
+plt.xlabel('lag time $t$')
+plt.ylabel(r'$\langle \Delta r^2 \rangle$ [$\mu$m$^2$]')
+plt.legend()
+plt.savefig("Trial_1_Line_of_best_fit")
+plt.show()
+plt.close()
+
+popt2, pcov2 = curve_fit(line, emT2.index, emT2)
+a2 = popt2[0]
+b2 = popt2[1]
+perr2 = np.sqrt(np.diag(pcov2))
+delta_a2 = perr2[0]
+delta_b2 = perr2[1]
+tvals = np.linspace(0, 20, 100)
+plt.plot(tvals, line(tvals, a2, b2), color = 'black', label = "Best Fit Curve")
+plt.scatter(emT2.index, emT2, color = 'gray', label = "Data")
+plt.xlabel('lag time $t$')
+plt.ylabel(r'$\langle \Delta r^2 \rangle$ [$\mu$m$^2$]')
+plt.legend()
+plt.savefig("Trial_2_Line_of_best_fit")
+plt.show()
+plt.close()
+
+popt3, pcov3 = curve_fit(line, emT3.index, emT3)
+a3 = popt3[0]
+b3 = popt3[1]
+perr3 = np.sqrt(np.diag(pcov3))
+delta_a3 = perr3[0]
+delta_b3 = perr3[1]
+tvals = np.linspace(0, 20, 100)
+plt.plot(tvals, line(tvals, a3, b3), color = 'black', label = "Best Fit Curve")
+plt.scatter(emT3.index, emT3, color = 'gray', label = "Data")
+plt.xlabel('lag time $t$')
+plt.ylabel(r'$\langle \Delta r^2 \rangle$ [$\mu$m$^2$]')
+plt.legend()
+plt.savefig("Trial_3_Line_of_best_fit")
+plt.show()
+plt.close()
+
+print(a1, "+/-", delta_a1)
+print(a2, "+/-", delta_a2)
+print(a3, "+/-", delta_a3)
+
+a = [a1, a2, a3]
+slopeavg = statistics.mean(a)
+slopedev = statistics.stdev(a)
+toterr = np.sqrt(((delta_a1/3) ** 2) + ((delta_a2/3) ** 2) + ((delta_a3/3) ** 2))
+print(slopeavg)
+print(toterr, "", slopedev)
